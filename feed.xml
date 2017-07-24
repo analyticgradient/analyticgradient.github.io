@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Analytic Gradient</title>
+    <description>a blog about economics, computer science, and machine learning</description>
+    <link>http://analyticgradient.com/</link>
+    <atom:link href="http://analyticgradient.com/feed.xml" rel="self" type="application/rss+xml"/>
+    <pubDate>Mon, 24 Jul 2017 15:09:12 +1000</pubDate>
+    <lastBuildDate>Mon, 24 Jul 2017 15:09:12 +1000</lastBuildDate>
+    <generator>Jekyll v3.1.6</generator>
+    
+      <item>
+        <title>Oracle attacks on convnets</title>
+        <description>&lt;p&gt;The dream: pwn a convolutional neural network. The goal: teach myself something. The disclaimer: I’m not a deep learning expert.&lt;/p&gt;
+
+&lt;h3 id=&quot;deep-learning-is-everywhere&quot;&gt;Deep learning is everywhere&lt;/h3&gt;
+&lt;p&gt;Deep learning is the hot new thing. Well, it’s not really new anymore. State-of-the-art?&lt;/p&gt;
+
+&lt;p&gt;If it’s not already everywhere it soon will be. Go champions have been defeated. Self-driving cars are recognising things on the road thanks to deep neural networks (DNNs). Presumably, surveillance of all stripes is being upgraded with DNNs. Malware and network intrusions are being detected. And evaded.&lt;/p&gt;
+
+&lt;p&gt;However, kind of like the internet, machine learning was never built to be secure.&lt;/p&gt;
+
+&lt;h3 id=&quot;adversarial-machine-learning&quot;&gt;Adversarial machine learning&lt;/h3&gt;
+&lt;p&gt;We’re sitting in your self-driving car as it zooms down a busy road. Halfway through the commute, the cameras in our car see a stop sign. Instead of stopping, our car accelerates through an intersection. We die. Or at least, we’re severely injured. I wonder how insurance works with self-driving cars?&lt;/p&gt;
+
+&lt;p&gt;What just happened? Did a hacker just take over our car? Not directly in this case – our car &lt;strong&gt;misinterpreted the stop sign as something else&lt;/strong&gt;. The hacker caused our car to misinterpret its environment. Maybe they used a marker to add a few dots to the sign.&lt;/p&gt;
+
+&lt;p&gt;Standard machine learning algorithms aren’t built to handle an adversary. They ingest their training data assuming nothing is wrong. They predict labels for new data, also assuming nothing is wrong. If we imagine ourselves the hacker, we can start to see a few weak points. There’s a good discussion on attacking ML algorithms in &lt;a href=&quot;http://dl.acm.org/citation.cfm?id=2046692&quot;&gt;Huang et al. (2011)&lt;/a&gt;. Let’s begin with a quick summary.&lt;/p&gt;
+
+&lt;h3 id=&quot;a-taxonomy-of-attacks&quot;&gt;A taxonomy of attacks&lt;/h3&gt;
+&lt;p&gt;Consider first at what stage in the ML pipeline we target our attacks. Attacks can be &lt;strong&gt;causative&lt;/strong&gt;, where we target the training data. If we manage to poison this, the classifier will infer a poor model. We could potentially control what kind of poor that classifier is – but either way, we can exploit it. Attacks can also be &lt;strong&gt;exploratory&lt;/strong&gt; – we’ll probe the model after it’s been trained, trying to find weak spots. Maybe we learn something about how it works, or what it was trained on. Maybe we can force it to misclassify something.&lt;/p&gt;
+
+&lt;p&gt;Attacks can also vary on how “large” they are. &lt;strong&gt;Integrity&lt;/strong&gt; attacks aim for false negatives – we can slip something by the classifier undetected. &lt;strong&gt;Availability&lt;/strong&gt; attacks aim to cause so many missclassifications – whether false positives or negatives – that the classifier essentially becomes unusable. It’s a bit like a denial of service attack.&lt;/p&gt;
+
+&lt;p&gt;Finally, attacks can be &lt;strong&gt;targeted&lt;/strong&gt; or &lt;strong&gt;indiscriminate&lt;/strong&gt;.&lt;/p&gt;
+
+&lt;h3 id=&quot;lets-attack-a-classifier&quot;&gt;Let’s attack a classifier&lt;/h3&gt;
+&lt;p&gt;Adversarial machine learning sounded really cool. I figured the best way to learn something was to actually attack some classifier. With that in mind, I’ll be implementing a black-box attack as described in &lt;a href=&quot;https://arxiv.org/abs/1602.02697&quot;&gt;Papernot et al. (2016)&lt;/a&gt; using a technique from &lt;a href=&quot;https://arxiv.org/abs/1412.6572&quot;&gt;Goodfellow et al. (2015)&lt;/a&gt;. In the above taxonomy, this is an &lt;strong&gt;explorative&lt;/strong&gt; attack.&lt;/p&gt;
+
+&lt;p&gt;I’ll be using python and tensorflow for this, targeting a convolutional neural network trained on &lt;a href=&quot;http://yann.lecun.com/exdb/mnist/&quot;&gt;MNIST&lt;/a&gt; handwritten digit data per the &lt;a href=&quot;https://www.tensorflow.org/get_started/mnist/pros&quot;&gt;tensorflow tutorial&lt;/a&gt;. Here’s some &lt;a href=&quot;https://www.youtube.com/watch?v=uoZgZT4DGSY&quot;&gt;music (nsfw?)&lt;/a&gt; I used to get into character.&lt;/p&gt;
+
+&lt;p&gt;Just before we begin, note that there is a python library called &lt;a href=&quot;https://github.com/tensorflow/cleverhans&quot;&gt;&lt;strong&gt;cleverhans&lt;/strong&gt;&lt;/a&gt; that implements this attack. In fact, the authors of the paper we’re implementing contributed. What follows is half me reading the paper(s) and half pulling the library apart in an attempt to understand the attack.&lt;/p&gt;
+
+&lt;h3 id=&quot;anatomy-of-an-attack&quot;&gt;Anatomy of an attack&lt;/h3&gt;
+&lt;p&gt;Most attacks tend to assume you have access to the target classifier internals (parameters, gradients, et al.). Then, given this information, you can craft &lt;strong&gt;adversarial samples&lt;/strong&gt; that cause it to missclassify (here’s a &lt;a href=&quot;https://blog.openai.com/robust-adversarial-inputs/&quot;&gt;cute example involving a kitten&lt;/a&gt;).&lt;/p&gt;
+
+&lt;p&gt;The Papernot et al. (2016) black-box attack (henceforth just black-box attack) assumes that we don’t have aceess to this information. We only have access to the predictions – that is, we have access to the target as an &lt;em&gt;oracle&lt;/em&gt;. We can query this oracle with some data and it will give us a prediction.&lt;/p&gt;
+
+&lt;p&gt;The black-box attack works by exploiting this access to train a substitute model. This substitute model essentially &lt;strong&gt;duplicates&lt;/strong&gt; the target model. We’re not out to maximise accuracy directly, but to learn the target’s decision boundaries.&lt;/p&gt;
+
+&lt;p&gt;In fact, we don’t even have to use the same model as the target. This is handy, because we may not know what it is. We could make some educated guesses, but this makes the attack more realistic. In this example, the target model is a convolutional neural network and the adversarial model is plain old multinomial logit.&lt;/p&gt;
+
+&lt;p&gt;To train the adversarial model, we start with 100 samples from the MNIST training set. We then get the oracle to labels these for us. That defines our training labels. Our training loop then looks like this:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-python&quot; data-lang=&quot;python&quot;&gt;&lt;span class=&quot;n&quot;&gt;adv_train_epochs&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;5&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mnist&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;train&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;next_batch&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;100&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;adv_train_epoch&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;range&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_train_epochs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;):&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;oracle_labels&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;oracle_predict&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;train&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_model&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;y&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;oracle_labels&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;
+
+    &lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;augment&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;Here, we run through &lt;code class=&quot;highlighter-rouge&quot;&gt;adv_train_epochs&lt;/code&gt; of adversarial training. Each epoch is called a substitute training epoch (although I’ve called it adversarial training epoch in the code). The only other thing that requires explanation here is the &lt;code class=&quot;highlighter-rouge&quot;&gt;augment&lt;/code&gt; step. What it does is build a new synthetic dataset based on the old one. It takes every training sample we have, perturbs it a bit (&lt;code class=&quot;highlighter-rouge&quot;&gt;new_example = example + lambda*pertubation_vector&lt;/code&gt; where lambda is a pertubation factor). This new, perturbed dataset is then added to the old one. So if we had 100 samples, now we have 200, where half of them are perturbed versions of the other half.&lt;/p&gt;
+
+&lt;p&gt;But we don’t just use white noise to generate the pertubation vector. We use a heuristic called Jacobian-based dataset augmentation. First, we grab the &lt;a href=&quot;http://mathworld.wolfram.com/Jacobian.html&quot;&gt;Jacobian&lt;/a&gt; of our adversarial model (a matrix of gradients of our predictions – of the adversarial model – with respect to inputs). We then evaluate it at every training sample we have. Finally, we take the dimension of that matrix depending on how the oracle labels that particular sample. So in practice the Jacobian is a list of lists – 10 lists of 784 elements (28x28 MNIST images). If the oracle predicts a 7, we choose the 7th out of 10. Therefore, we can define some helper functions:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-python&quot; data-lang=&quot;python&quot;&gt;&lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;jacobian&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;predictions&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;inputs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;num_classes&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;):&lt;/span&gt;
+    &lt;span class=&quot;c&quot;&gt;#That is, how does the kth element of yhat vary wrt x?&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tf&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;gradients&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;predictions&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[:,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;c&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;],&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;inputs&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt;
+            &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;c&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;range&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;num_classes&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)]&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;def&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;jacobian_prediction_dimension&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;grads&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;predictions&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;):&lt;/span&gt;
+    &lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;grads&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;predictions&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]][&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;i&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;i&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;np&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;arange&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;nb&quot;&gt;len&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;predictions&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))]&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;This information – how our model ourput varies with respect to inputs – lets us generate some &lt;strong&gt;useful variance&lt;/strong&gt; from which to learn the oracle’s decision boundaries. To complete the heuristic, we take the sign of our selected dimension of the Jacobian and then add it to the original example subject to some pertubation factor lambda. Lambda can vary over each training epoch, here we’ve made it flip sign every &lt;code class=&quot;highlighter-rouge&quot;&gt;tau&lt;/code&gt; epochs. The code for the &lt;code class=&quot;highlighter-rouge&quot;&gt;augment&lt;/code&gt; heuristic:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-python&quot; data-lang=&quot;python&quot;&gt;&lt;span class=&quot;c&quot;&gt;#Jacobian-based dataset augmentation&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;#note that yhat is the logit output of the adversary&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;#and oracle_labels is one-hot encoded&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;grads&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sess&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;run&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;jacobian&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;yhat&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;xm&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;10&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;),&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;feed_dict&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;xm&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;jpd&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;jacobian_prediction_dimension&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;grads&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;np&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;argmax&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;oracle_labels&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+
+&lt;span class=&quot;n&quot;&gt;perturbed_set&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;jbda_epoch_lambda&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;jbda_lambda&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;np&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;power&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;np&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;floor&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_train_epoch&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tau&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;for&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;idx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;example&lt;/span&gt; &lt;span class=&quot;ow&quot;&gt;in&lt;/span&gt; &lt;span class=&quot;nb&quot;&gt;enumerate&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;):&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;new_example&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;example&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;jbda_epoch_lambda&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;np&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sign&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;jpd&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;idx&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;]))&lt;/span&gt;
+    &lt;span class=&quot;n&quot;&gt;perturbed_set&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;append&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;new_example&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;np&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;vstack&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;((&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_train_set&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;np&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;array&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;perturbed_set&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)))&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;And that’s it! We’ve now trained the adversary.&lt;/p&gt;
+
+&lt;h3 id=&quot;generating-adversarial-examples&quot;&gt;Generating adversarial examples&lt;/h3&gt;
+&lt;p&gt;Now we want to generate some adversarial examples that pass the human sniff test but are missclassified.&lt;/p&gt;
+
+&lt;p&gt;Now that we have a substitute model we can use some of the white-box attacks developed elsewhere in the literature. Recall that these attacks assumed we have some knowledge of the target classifier. Now we do – we’ve trained a substitute model to mimic the target’s decision boundaries!&lt;/p&gt;
+
+&lt;p&gt;Generating adversarial examples involves perturbing some original input in some fashion. Right off the bat we can think of one method – what if we just added random pertubations? A smarter idea might be to run some sort of optimisation method over the noise we generate – genetic algorithms, particle swarm optimisation, simulated annealing. This is feasible since we have access to a substitute model (which we can query in our own time without being detected). But it may not be the smartest.&lt;/p&gt;
+
+&lt;p&gt;I use the method described in Goodfellow et al. (2015) – henceforth Goodfellow attack or Fast Gradient Sign Method. Essentially, this attack perturbs all of the image a little bit (there’s another attack that perturbs some of the image a lot described in the paper). We calculate the pertubation vector in a similar fashion to how we calculate it for Jacobian-based dataset augmentation above. Except the gradient vector is of the loss function with respect to inputs, given model outputs (to prevent label leakage, described in &lt;a href=&quot;https://arxiv.org/abs/1611.01236&quot;&gt;Kurakin et al. 2016&lt;/a&gt; – thanks cleverhans!)&lt;/p&gt;
+
+&lt;p&gt;Here’s how I did it:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-python&quot; data-lang=&quot;python&quot;&gt;&lt;span class=&quot;c&quot;&gt;#Goodfellow attack (FGSA)&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;goodfellow_eps&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;0.3&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;#grab the adversary predictions of the test data to use as labels: adv_onehot&lt;/span&gt;
+&lt;span class=&quot;c&quot;&gt;#define loss function&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;goodfellow_loss&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tf&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;reduce_mean&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tf&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;nn&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;softmax_cross_entropy_with_logits&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;
+  &lt;span class=&quot;n&quot;&gt;labels&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;adv_onehot&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;logits&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;yhat&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;
+
+&lt;span class=&quot;c&quot;&gt;#calculate the signed gradient matrix of loss wrt x given labels&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;fgsa&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tf&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;sign&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;tf&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;gradients&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;goodfellow_loss&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;xm&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)[&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;])&lt;/span&gt;
+
+&lt;span class=&quot;c&quot;&gt;#add it to the examples subject to a pertubation factor epsilon&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;adv_test&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tf&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;stop_gradient&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;xm&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;goodfellow_eps&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;fgsa&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+&lt;span class=&quot;c&quot;&gt;#clip to remain in the MNIST domain [0, 1]&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;adv_test_clip&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;tf&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;clip_by_value&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_test&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;0.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+
+&lt;span class=&quot;c&quot;&gt;#get tensorflow to generate them&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;adv_examples&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sess&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;run&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;adv_test_clip&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;feed_dict&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;xm&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mnist&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;And then some reports:&lt;/p&gt;
+
+&lt;figure class=&quot;highlight&quot;&gt;&lt;pre&gt;&lt;code class=&quot;language-python&quot; data-lang=&quot;python&quot;&gt;&lt;span class=&quot;c&quot;&gt;#calculate accuracy of oracle on normal test data and perturbed test data&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;test_acc_nonadv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sess&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;run&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;accuracy&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;feed_dict&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mnist&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;images&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;y_&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mnist&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;labels&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;keep_prob&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;test_acc_adv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;sess&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;run&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;accuracy&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;feed_dict&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;
+  &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;adv_examples&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;y_&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;mnist&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;test&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;labels&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;keep_prob&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;1.0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;})&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;print&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Test accuracy &lt;/span&gt;&lt;span class=&quot;si&quot;&gt;%&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;f&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;%&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;test_acc_nonadv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;print&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Test accuracy (after attack) &lt;/span&gt;&lt;span class=&quot;si&quot;&gt;%&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;f&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;%&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;test_acc_adv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;k&quot;&gt;print&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;&quot;Accuracy reduction &lt;/span&gt;&lt;span class=&quot;si&quot;&gt;%&lt;/span&gt;&lt;span class=&quot;s&quot;&gt;f&quot;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;%&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;test_acc_nonadv&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;-&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;test_acc_adv&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;))&lt;/span&gt;&lt;/code&gt;&lt;/pre&gt;&lt;/figure&gt;
+
+&lt;p&gt;After running it a few times (rather quickly, because logits are fast to train), I usually got an accuracy reduction of about 20 percentage points. That takes the model down from 99.2 per cent accuracy to around 80 per cent. A caveat in that the epsilon I’m using as a pertubation factor, 0.3, seems high – reasonable for a first pass at the attack (I may have gotten the code wrong, after all!).&lt;/p&gt;
+
+&lt;p&gt;Here’s a particularly entertaining log:&lt;/p&gt;
+
+&lt;div class=&quot;highlighter-rouge&quot;&gt;&lt;pre class=&quot;codehilite&quot;&gt;&lt;code&gt;Test accuracy 0.992600
+Test accuracy (after attack) 0.664400
+Accuracy reduction 0.328200
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+
+&lt;p&gt;I think an accuracy reduction of 33 percentage points is enough to make a classifier unusable. Cool!&lt;/p&gt;
+
+&lt;h3 id=&quot;further-reading&quot;&gt;Further reading&lt;/h3&gt;
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;https://blog.openai.com/adversarial-example-research/&quot;&gt;Attacking Machine Learning with Adversarial Examples&lt;/a&gt; (OpenAI)&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://arxiv.org/abs/1707.05373&quot;&gt;Houdini: Fooling Deep Structured Prediction Models&lt;/a&gt; (arXiv)&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://arxiv.org/abs/1511.07528&quot;&gt;The Limitations of Deep Learning in Adversarial Settings&lt;/a&gt; (arXiv)&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://arxiv.org/abs/1412.1897&quot;&gt;Deep Neural Networks are Easily Fooled: High Confidence Predictions for Unrecognizable Images&lt;/a&gt; (arXiv)&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;http://www.cleverhans.io/security/privacy/ml/2017/02/15/why-attacking-machine-learning-is-easier-than-defending-it.html&quot;&gt;Is attacking machine learning easier than defending it?&lt;/a&gt; (cleverhans)&lt;/li&gt;
+&lt;/ul&gt;
+</description>
+        <pubDate>Tue, 25 Jul 2017 00:00:00 +1000</pubDate>
+        <link>http://analyticgradient.com/oracle-attacks-on-convnets.html</link>
+        <guid isPermaLink="true">http://analyticgradient.com/oracle-attacks-on-convnets.html</guid>
+        
+        
+        <category>machine-learning</category>
+        
+      </item>
+    
+      <item>
+        <title>Hello world!</title>
+        <description>&lt;p&gt;Hello all. I have hacked this site togther with what I remember of html and css. It’s quite simple. So hopefully it works well.&lt;/p&gt;
+
+&lt;p&gt;I’m an economist. At university, I studied economics, computer science, and mathematics. So this blog will be about those things and how they intersect. I won’t claim that I’m an expert; I’m here to learn.&lt;/p&gt;
+
+&lt;p&gt;It’ll be a place where I can dump my thoughts and also to talk about more practical things. There’s no comment section yet. That’s because I don’t like disqus and was too lazy to set up an alternative. It’s not because I don’t love you. Also, I don’t expect many people to read this blog. Let’s be realistic.&lt;/p&gt;
+
+&lt;p&gt;In case anybody is reading, disclaimer time. Posts here do not represent the view of my employer. They represent solely my own, acting as representative of no-one. Except myself.&lt;/p&gt;
+</description>
+        <pubDate>Mon, 24 Jul 2017 00:24:27 +1000</pubDate>
+        <link>http://analyticgradient.com/hello-world.html</link>
+        <guid isPermaLink="true">http://analyticgradient.com/hello-world.html</guid>
+        
+        
+        <category>meta</category>
+        
+      </item>
+    
+  </channel>
+</rss>
